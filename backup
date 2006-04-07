@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# girok -- backup manager
+  Version=1.20060406
+# Author: Jaeho Shin <netj@sparcs.org>
+# Refined: 2006-04-06
+# Created: 2004-08-24
+
+set -e
+
+TMPDIR=${TMPDIR:-/backup}; export TMPDIR
+BackupRoot=${BackupRoot:-/backup/loop}
+BackupTab=${BackupTab:-/etc/backuptab}
+
+foreach_backup() {
+    local line=0 rest= prefix= period= options= paths=
+    while read; do
+        let ++line
+        [ "$REPLY" = "${REPLY#\#}" -o -z "$REPLY" ] || continue
+        rest=$REPLY
+        prefix=${rest%%	*}
+        rest=${rest#$prefix	}
+        periodspec=${rest%%	*}
+        rest=${rest#$periodspec	}
+        options=${rest%%	*}
+        paths=${rest#$options	}
+        if [ -n "$prefix" -a -n "$periodspec" -a -n "$paths" ]; then
+            "$@"
+        else
+            echo "$BackupTab: line $line: syntax error" >&2
+        fi
+    done <"$BackupTab"
+}
+
+Here=$PWD
+Base=`cd "$(dirname "$0")" && pwd`
+Name=`basename "$0"`
+Args=("$@")
+error() { echo "$Name: $@" >&2; }
+
+cd "$BackupRoot"
+case "$Name" in
+    backup)
+    usage() {
+        cat <<EOF
+girok $Version -- perform backup
+Usage: backup { <prefix> }
+
+Create backup archives for <prefix>es defined in $BackupTab.
+Each line in $BackupTab defines an archive series.  Each must have four
+fields separated by tab character: prefix, period, options, and paths.
+Lines that begin with a \# are ignored.  Each archive is created under
+$BackupRoot/ with the specified prefix, period, and options by girok(1).
+
+For example, the following defines an archive series that will be stored as
+$BackupRoot/home/netj-*-*.tar.gpg.
+-->8--
+home/netj	%m/3	-e netj	/home/netj
+--8<--
+See girok(1) for more information about periods and options.
+EOF
+        [ $# -gt 0 ] && error "$@"
+        exit 2
+    }
+    [ $# -eq 0 ] && usage
+
+    # prepare output holder
+    tmp=`mktemp /tmp/backup.XXXXXX`
+    trap "rm -f $tmp" EXIT ERR HUP INT TERM
+    failure=0
+    do_backup() {
+        local a=
+        for a in "${Args[@]}"; do
+            [ `expr "$prefix" : "$a"` -eq ${#prefix} ] || continue
+            echo -n "* $prefix:	"
+            if eval "'${Base/"'"/"'\\''"}'/girok $options \
+                    $prefix $periodspec $paths" >"$tmp" 2>&1; then
+                echo OK
+            else
+                echo FAILED
+                let ++failure
+                cat "$tmp" 2>/dev/null
+            fi
+        done
+    }
+
+    foreach_backup do_backup
+    exit $failure
+    ;;
+
+
+    recover)
+    usage() {
+        cat <<EOF
+girok $Version -- recover files
+Usage: recover [ -t [[CC]YY]MMDDhhmm[.ss] ] { <path> }
+
+Finds and extracts given paths from backup archives,
+from the most recent backup before the given time.
+Current date and time are used if not specified.
+EOF
+        [ $# -gt 0 ] && error "$@"
+        exit 2
+    }
+    # process options
+    while getopts "t:" o; do
+        case "$o" in
+            t) when=$OPTARG ;;
+        esac
+    done
+    shift $(($OPTIND - 1))
+    [ $# -eq 0 ] && usage
+    when=${when:-`date +%Y%m%d%H%M.%S`}
+    # prepare timestamp
+    timestamp=`mktemp /tmp/recover.XXXXXX`
+    trap "rm -f $timestamp" EXIT ERR HUP INT TERM
+    touch -m -t $when $timestamp 2>/dev/null ||
+    usage "specify time in [[CC]YY]MMDDhhmm[.ss]"
+
+    timefmt="%Y-%m-%dT%H:%M:%S"
+    # GNU is default
+    mtime() { echo "`date -r $arc +$timefmt`"; }
+    most_recent() {
+        xargs -rl stat -c "%Y	%n" \
+        | sort -n | tail -1 | cut -f 2
+    }
+    # detect other OSes
+    case `uname` in
+        *BSD)
+        mtime() { echo "`stat -f %Sm -t $timefmt $arc`"; }
+        most_recent() {
+            xargs -L1 stat -f "%m	%N" \
+            | sort -n | tail -1 | cut -f 2
+        }
+        ;;
+    esac
+    try_recovery() {
+        # find arguments which may be contained in this archive series
+        local p a qs; qs=()
+        for p in `eval "echo $paths"`; do
+            for a in "${Args[@]}"; do
+                [ `expr "$a" : "$p"` -eq ${#p} ] ||
+                [ `expr "$p" : "$a"` -eq ${#a} ] || continue
+                qs=("${qs[@]}" "${a#/}")
+            done
+        done
+        [ ${#qs[@]} -gt 0 ] || return 0
+        # extract them from this archive series
+        echo -n "$prefix: recovering ${qs[@]}"
+        local arc=`find "$prefix-"*"-0.tar"* \
+            ! -newer "$timestamp" | most_recent`
+        if ! [ -e "$arc" ]; then
+            error "$prefix: none exists for $when"
+            return 0
+        fi
+        # look for period and suffix
+        local suffix=".tar${arc##*-0.tar}"
+        local period=${arc#*$prefix-}
+        period=${period%-0$suffix}
+        # extract files from each successive archive
+        untar() { tar -C "$Here" -vxpf "$@" "${qs[@]}"; }
+        # TODO: check list of deleted files?
+        case "$suffix" in
+            .tar.bz2) extractfrom() { untar "$arc" -j; } ;;
+            .tar.gz)  extractfrom() { untar "$arc" -z; } ;;
+            .tar)     extractfrom() { untar "$arc";    } ;;
+            .tar.gpg) extractfrom() {
+            # TODO rememeber and reuse passphrase for key?
+            gpg --quiet --decrypt "$arc" | untar -; } ;;
+            *) error "$arc: not supported"; return 0 ;;
+        esac
+        echo " from $prefix-$period-*"
+        local id=0 lastarc=
+        while arc="$prefix-$period-$id$suffix"
+            let id++; [ -z "$lastarc" -o \
+            "$lastarc" -ot "$arc" -a "$arc" -ot "$timestamp" ]; do
+            echo " searching $arc (`mtime "$arc"`)"
+            set +e; extractfrom "$arc"; set -e
+            lastarc=$arc
+        done
+    }
+
+    foreach_backup try_recovery
+    exit 0
+    ;;
+esac

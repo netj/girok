@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# girok -- incremental backup script
+  Name="girok"
+# Author: Jaeho Shin <netj@sparcs.org>
+# Refined: 2006-04-06
+# Created: 2003-10-29
+  Version=1.20060406
+
+usage() {
+    cat <<EOF
+$Name $Version
+Usage: $Name { <option> } <prefix> %fmt/# { <path> | <option-for-tar> }
+
+Option:
+  -h          show this usage
+  -o user     owner of the backup
+  -g group    owner group of the backup
+  -m mode     access mode for the backup
+  -e keyid    compress and encrypt with GnuPG
+  -j          compress with bzip2
+  -z          compress with gzip
+
+Period:
+  You must specify a rotation period as "%fmt/#".
+  "%fmt" is the format string used in date, e.g. %m, %U, %d, and
+  "#" is the number of periods to keep until next rotation.
+
+  Path where to place the backup is determined by appending
+  \`date +%fmt\` to <prefix>, i.e. "<prefix>-\`date +%fmt\`".
+  For example, "%U/4" means, restart every week and keep them for 3 weeks,
+  and "%m/6" means, restart every month and keep them for 5 months.
+
+Environment Variable:
+  * TMPDIR for directory that will hold temporary files
+  * GNUPGHOME or HOME for encryption
+EOF
+    exit 2
+}
+
+set -e
+
+# default options
+umask 077
+ulimit -c 0
+mode="a=,ug=r"
+owner="backup"
+group="backup"
+encrypt=false
+encrypt_key=
+compress_type=bzip2
+
+# process options
+while getopts "hm:o:zjirp:e:" c; do
+    case "$c" in
+        z) compress_type=gzip ;;
+        j) compress_type=bzip2 ;;
+        e) encrypt=true; encrypt_key=$OPTARG ;;
+        o) owner=$OPTARG ;;
+        g) group=$OPTARG ;;
+        m) mode=$OPTARG ;;
+        h) usage ;;
+    esac
+done
+shift $(($OPTIND - 1))
+[ $# -lt 3 ] && usage
+prefix=$1 periodspec=$2; shift 2
+paths=("$@")
+
+
+# check environment
+err() { echo "$Name: $@" >&2; exit 1; }
+if $encrypt; then
+    if ! [ -n "$HOME" -a -n "$GNUPGHOME" ]; then
+        err "For encryption, HOME or at least GNUPGHOME must be set"
+    fi
+    # TODO: existence of gpg key
+fi
+# TODO: existence of owner, group
+
+
+# some useful pieces
+cleanup() {
+    exitcode=$?
+    trap "exit $exitcode" EXIT ERR HUP INT TERM
+    [ -f "$tmp/err" ] && cat "$tmp/err" >&2
+    rm -rf "$tmp"
+}
+is_root() { [ $EUID -eq 0 ]; }
+set_attr() {
+    local f=
+    for f in "$@"; do
+        [ -e "$f" ] || continue
+        is_root && chown -f $owner "$f"
+        chgrp -f $group "$f"
+        chmod -f $mode "$f"
+    done
+}
+esc() {
+    local a s=
+    for a in "$@"; do
+        s="$s'${a//"'"/"'\\''"}' "
+    done
+    echo "$s"
+}
+run_as() {
+    local owner=$1; shift
+    is_root && su $owner -c "`esc "$@"`" || "$@"
+}
+
+
+# some variables
+suffix=".tar"
+taropts=()
+addtaropt() { taropts=("${taropts[@]}" "$@"); }
+# process encrypt/compress option
+if $encrypt; then
+    suffix=".tar.gpg"
+else
+    case "$compress_type" in
+        bzip2) addtaropt -j; suffix=".tar.bz2" ;;
+        gzip)  addtaropt -z; suffix=".tar.gz" ;;
+        "")    ;;
+        *)     echo unknown compress type: $compress_type >&2; exit 4 ;;
+    esac
+fi
+
+
+# determine current period
+periodfmt=${periodspec%/*}
+periodcnt=${periodspec#*/}
+period=`date +"$periodfmt" | sed -e 's/^0*//g'`
+period=`printf "%0${#periodcnt}d" $(($period % $periodcnt))`
+#  and sub-period id
+id=0
+while [ -e "$prefix-$period-$id$suffix" ]; do
+    lastid=$id
+    let ++id
+    # check mtime for restarted incremental backup
+    [ "$prefix-$period-$id$suffix" -nt \
+      "$prefix-$period-$lastid$suffix" ] || break
+done
+# prepare a directory
+tmp=`mktemp -d "${TMPDIR:-.}/girok.XXXXXX"`
+trap cleanup EXIT ERR HUP INT TERM
+# determine whether to restart or not
+if [ "$period@$periodspec" != "`cat "$prefix.last" 2>/dev/null`" ]; then
+    echo "$period@$periodspec" >"$tmp/last"
+    restart=true
+else
+    restart=false
+fi
+# prepare incremental timestamp
+touch "$tmp/inc"
+addtaropt -g "$tmp/inc"
+$restart || cp -pf "$prefix.inc" "$tmp/inc"
+chmod +w "$tmp/inc"
+
+
+# put everything into the archive
+justtar() {
+    tar -cvf - "${taropts[@]}" "${paths[@]}" 2>"$tmp/err"
+}
+encrypttar() {
+    justtar | \
+    gpg --batch --quiet --always-trust --recipient $encrypt_key --encrypt
+}
+tarcmd=justtar
+$encrypt && tarcmd=encrypttar
+if ! $tarcmd >"$tmp/tar"; then
+    # TODO: handle more error conditions
+    [ -s "$tmp/tar" ] || exit 4
+fi
+# TODO: maintain a file list, or list of deleted files
+
+
+# place it in the right place
+set_attr "$tmp/tar" "$tmp/inc" "$tmp/last"
+run_as $owner mkdir -p -m 755 "`dirname "$prefix"`"
+if $restart; then
+    rm -f "$prefix-$period-"*"$suffix"
+    mv -f "$tmp/last" "$prefix.last"
+fi
+backup="$prefix-$period-$id$suffix"
+mv -f "$tmp/tar" "$backup"
+mv -f "$tmp/inc" "$prefix.inc"
+
+
+# finish message
+echo -n "Backup completed:"
+$encrypt && echo -n " encrypted"
+$restart && echo -n " restarted" || echo -n " incremental"
+echo
+echo "$backup (`du -h "$backup" | cut -f1`) containing:"
+if $restart; then
+    # show given arguments (instead of whole list)
+    for i in "$@"; do echo "$i"; done
+else
+    # show changed(stderr output of tar), so backup'ed files but no directories
+    grep -v /$ "$tmp/err"
+fi
+rm -f "$tmp/err"
+
+
+exit 0
