@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # girok -- backup manager
-  Version=1.20060406
+  Version=1.20060413
 # Author: Jaeho Shin <netj@sparcs.org>
 # Refined: 2006-04-06
 # Created: 2004-08-24
@@ -8,7 +8,7 @@
 set -e
 
 TMPDIR=${TMPDIR:-/backup}; export TMPDIR
-BackupRoot=${BackupRoot:-/backup/loop}
+BackupRoot=${BackupRoot:-/backup/archive}
 BackupTab=${BackupTab:-/etc/backuptab}
 
 foreach_backup() {
@@ -63,27 +63,50 @@ EOF
     }
     [ $# -eq 0 ] && usage
 
+    finish() {
+        local exitcode=$?
+        trap "exit $exitcode" EXIT ERR HUP INT TERM
+        rm -f $tmp
+        echo "ends   at `date +'%F %T %z'`"
+        exit $exitcode
+    }
     # prepare output holder
     tmp=`mktemp /tmp/backup.XXXXXX`
-    trap "rm -f $tmp" EXIT ERR HUP INT TERM
+    trap finish EXIT ERR HUP INT TERM
+
     failure=0
     do_backup() {
         local a=
         for a in "${Args[@]}"; do
             [ `expr "$prefix" : "$a"` -eq ${#prefix} ] || continue
-            echo -n "* $prefix:	"
+            printf "* %-16s" "$prefix:"
             if eval "'${Base/"'"/"'\\''"}'/girok $options \
-                    $prefix $periodspec $paths" >"$tmp" 2>&1; then
-                echo OK
+                    $prefix $periodspec $paths" >$tmp 2>&1; then
+                printf "%28s %5s" \
+                    `grep 'containing:$' $tmp | sed -e 's/(\([^)]*\)).*/\1/'`
+                head -1 $tmp | sed -e 's/^.*://'
             else
                 echo FAILED
                 let ++failure
-                cat "$tmp" 2>/dev/null
+                cat $tmp 2>/dev/null
             fi
         done
     }
 
+    echo "girok $Version"
+    echo "backup ${Args[@]}"
+    echo "begins at `date +'%F %T %z'`"
+    echo
+
+    echo "= backups ="
     foreach_backup do_backup
+    echo
+
+    echo "= disk usages ="
+    df -h `find /backup/archive/ -type d` \
+    | tail +2 | sort | uniq | sed -e 's/^/* /'
+    echo
+
     exit $failure
     ;;
 

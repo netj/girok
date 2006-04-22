@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # girok -- incremental backup script
-  Name="girok"
+  Version=1.20060413
 # Author: Jaeho Shin <netj@sparcs.org>
 # Refined: 2006-04-06
 # Created: 2003-10-29
-  Version=1.20060406
 
 usage() {
     cat <<EOF
-$Name $Version
-Usage: $Name { <option> } <prefix> %fmt/# { <path> | <option-for-tar> }
+girok $Version
+Usage: girok { <option> } <prefix> %fmt/# { <path> | <option-for-tar> }
 
 Option:
   -h          show this usage
@@ -47,7 +46,7 @@ owner="backup"
 group="backup"
 encrypt=false
 encrypt_key=
-compress_type=bzip2
+compress_type=gzip
 
 # process options
 while getopts "hm:o:zjirp:e:" c; do
@@ -68,7 +67,7 @@ paths=("$@")
 
 
 # check environment
-err() { echo "$Name: $@" >&2; exit 1; }
+err() { echo "girok: $@" >&2; exit 1; }
 if $encrypt; then
     if ! [ -n "$HOME" -a -n "$GNUPGHOME" ]; then
         err "For encryption, HOME or at least GNUPGHOME must be set"
@@ -94,17 +93,6 @@ set_attr() {
         chgrp -f $group "$f"
         chmod -f $mode "$f"
     done
-}
-esc() {
-    local a s=
-    for a in "$@"; do
-        s="$s'${a//"'"/"'\\''"}' "
-    done
-    echo "$s"
-}
-run_as() {
-    local owner=$1; shift
-    is_root && su $owner -c "`esc "$@"`" || "$@"
 }
 
 
@@ -175,7 +163,7 @@ fi
 
 # place it in the right place
 set_attr "$tmp/tar" "$tmp/inc" "$tmp/last"
-run_as $owner mkdir -p -m 755 "`dirname "$prefix"`"
+mkdir -p -m 755 "`dirname "$prefix"`"
 if $restart; then
     rm -f "$prefix-$period-"*"$suffix"
     mv -f "$tmp/last" "$prefix.last"
