@@ -1,9 +1,0 @@
-#!/bin/sh
-# restricted rsync
-# Author: Jaeho Shin <netj@ropas.snu.ac.kr>
-# Created: 2006-04-07
-
-case "$SSH_ORIGINAL_COMMAND" in
-    "rsync --server --sender"*"/backup/loop/"*) $SSH_ORIGINAL_COMMAND ;;
-    *) echo "rrsync: Permission denied" >&2; exit 1 ;;
-esac

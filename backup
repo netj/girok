@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # girok -- backup manager
-  Version=1.20060413
+  Version=1.20060503
 # Author: Jaeho Shin <netj@sparcs.org>
 # Refined: 2006-04-06
 # Created: 2004-08-24
@@ -137,27 +137,37 @@ EOF
     timestamp=`mktemp /tmp/recover.XXXXXX`
     trap "rm -f $timestamp" EXIT ERR HUP INT TERM
     touch -m -t $when $timestamp 2>/dev/null ||
-    usage "specify time in [[CC]YY]MMDDhhmm[.ss]"
+        usage "specify time in [[CC]YY]MMDDhhmm[.ss]"
 
     timefmt="%Y-%m-%dT%H:%M:%S"
     # GNU is default
     mtime() { echo "`date -r $arc +$timefmt`"; }
-    most_recent() {
-        xargs -rl stat -c "%Y	%n" \
-        | sort -n | tail -1 | cut -f 2
-    }
+    chronological() { xargs -0r ls -tr; }
     # detect other OSes
     case `uname` in
         *BSD)
         mtime() { echo "`stat -f %Sm -t $timefmt $arc`"; }
-        most_recent() {
-            xargs -L1 stat -f "%m	%N" \
-            | sort -n | tail -1 | cut -f 2
+        chronological() {
+            local input=`cat` # XXX: must be very inefficient :(
+            if [ -n "$input" ]; then
+                echo "$input" | xargs -0 ls -tr
+            fi
         }
         ;;
     esac
+    extract_from() {
+        local arc=$1
+        case "$arc" in
+            *.tar.gz)  untar "$arc" -z                          ;;
+            *.tar.bz2) untar "$arc" -j                          ;;
+            *.tar)     untar "$arc"                             ;;
+            # TODO rememeber and reuse passphrase for key?
+            *.tar.gpg) gpg --quiet --decrypt "$arc" | untar -   ;;
+            *) error "$arc: not supported"; return 0 ;;
+        esac
+    }
     try_recovery() {
-        # find arguments which may be contained in this archive series
+        # find requested files which may be in this archive series
         local p a qs; qs=()
         for p in `eval "echo $paths"`; do
             for a in "${Args[@]}"; do
@@ -167,38 +177,27 @@ EOF
             done
         done
         [ ${#qs[@]} -gt 0 ] || return 0
-        # extract them from this archive series
         echo -n "$prefix: recovering ${qs[@]}"
-        local arc=`find "$prefix-"*"-0.tar"* \
-            ! -newer "$timestamp" | most_recent`
-        if ! [ -e "$arc" ]; then
+        # find the base archive (the most recent one)
+        local arc=`find "$prefix-"*.0.* -type f ! -newer "$timestamp" \
+                    -print0 2>/dev/null | chronological | tail -1`
+        local period=${arc%.0.*}
+        if ! [ -f "$arc" ]; then
             error "$prefix: none exists for $when"
             return 0
         fi
-        # look for period and suffix
-        local suffix=".tar${arc##*-0.tar}"
-        local period=${arc#*$prefix-}
-        period=${period%-0$suffix}
-        # extract files from each successive archive
-        untar() { tar -C "$Here" -vxpf "$@" "${qs[@]}"; }
         # TODO: check list of deleted files?
-        case "$suffix" in
-            .tar.bz2) extractfrom() { untar "$arc" -j; } ;;
-            .tar.gz)  extractfrom() { untar "$arc" -z; } ;;
-            .tar)     extractfrom() { untar "$arc";    } ;;
-            .tar.gpg) extractfrom() {
-            # TODO rememeber and reuse passphrase for key?
-            gpg --quiet --decrypt "$arc" | untar -; } ;;
-            *) error "$arc: not supported"; return 0 ;;
-        esac
-        echo " from $prefix-$period-*"
-        local id=0 lastarc=
-        while arc="$prefix-$period-$id$suffix"
-            let id++; [ -z "$lastarc" -o \
-            "$lastarc" -ot "$arc" -a "$arc" -ot "$timestamp" ]; do
-            echo " searching $arc (`mtime "$arc"`)"
-            set +e; extractfrom "$arc"; set -e
-            lastarc=$arc
+        untar() { tar -C "$Here" -vxpf "$@" "${qs[@]}"; }
+        # and extract files from successive archives
+        echo " from $period.*.*"
+        while [ -f "$arc" ]; do
+            # extract from $arc
+            echo " searching $arc (`mtime "$arc"`) (skip = ^\\)"
+            set +e; extract_from "$arc"; set -e
+            # pick the next oldest one for arc
+            arc=`find "$period".*.* -type f \
+                    -newer "$arc" ! -newer "$timestamp" \
+                    -print0 2>/dev/null | chronological | head -1`
         done
     }
 

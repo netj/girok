@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # girok -- incremental backup script
-  Version=1.20060413
+  Version=1.20060503
 # Author: Jaeho Shin <netj@sparcs.org>
 # Refined: 2006-04-06
 # Created: 2003-10-29
@@ -69,7 +69,7 @@ paths=("$@")
 # check environment
 err() { echo "girok: $@" >&2; exit 1; }
 if $encrypt; then
-    if ! [ -n "$HOME" -a -n "$GNUPGHOME" ]; then
+    if ! [ -d "$HOME/.gnupg" -o -d "$GNUPGHOME" ]; then
         err "For encryption, HOME or at least GNUPGHOME must be set"
     fi
     # TODO: existence of gpg key
@@ -97,39 +97,30 @@ set_attr() {
 
 
 # some variables
-suffix=".tar"
+suffix="tar"
 taropts=()
 addtaropt() { taropts=("${taropts[@]}" "$@"); }
 # process encrypt/compress option
 if $encrypt; then
-    suffix=".tar.gpg"
+    suffix="tar.gpg"
 else
     case "$compress_type" in
-        bzip2) addtaropt -j; suffix=".tar.bz2" ;;
-        gzip)  addtaropt -z; suffix=".tar.gz" ;;
+        bzip2) addtaropt -j; suffix="tar.bz2" ;;
+        gzip)  addtaropt -z; suffix="tar.gz" ;;
         "")    ;;
         *)     echo unknown compress type: $compress_type >&2; exit 4 ;;
     esac
 fi
 
 
+# prepare a directory safe to play with
+tmp=`mktemp -d "${TMPDIR:-.}/girok.XXXXXX"`
+trap cleanup EXIT ERR HUP INT TERM
 # determine current period
 periodfmt=${periodspec%/*}
 periodcnt=${periodspec#*/}
 period=`date +"$periodfmt" | sed -e 's/^0*//g'`
 period=`printf "%0${#periodcnt}d" $(($period % $periodcnt))`
-#  and sub-period id
-id=0
-while [ -e "$prefix-$period-$id$suffix" ]; do
-    lastid=$id
-    let ++id
-    # check mtime for restarted incremental backup
-    [ "$prefix-$period-$id$suffix" -nt \
-      "$prefix-$period-$lastid$suffix" ] || break
-done
-# prepare a directory
-tmp=`mktemp -d "${TMPDIR:-.}/girok.XXXXXX"`
-trap cleanup EXIT ERR HUP INT TERM
 # determine whether to restart or not
 if [ "$period@$periodspec" != "`cat "$prefix.last" 2>/dev/null`" ]; then
     echo "$period@$periodspec" >"$tmp/last"
@@ -150,35 +141,53 @@ justtar() {
 }
 encrypttar() {
     justtar | \
-    gpg --batch --quiet --always-trust --recipient $encrypt_key --encrypt
+    gpg --encrypt --batch --quiet --always-trust --default-recipient-self \
+        ${encrypt_key:+--recipient "$encrypt_key"}
 }
 tarcmd=justtar
 $encrypt && tarcmd=encrypttar
-if ! $tarcmd >"$tmp/tar"; then
+if ! $tarcmd >"$tmp/arc"; then
     # TODO: handle more error conditions
-    [ -s "$tmp/tar" ] || exit 4
+    [ -s "$tmp/arc" ] || exit 4
 fi
 # TODO: maintain a file list, or list of deleted files
 
 
-# place it in the right place
-set_attr "$tmp/tar" "$tmp/inc" "$tmp/last"
+# determine sub-period id
+id=0
+if ! $restart; then
+    # find base
+    arc=`find "$prefix-$period.0".* -type f | head -1`
+    while [ -f "$arc" ]; do
+        let ++id
+        # find an incremental archive having this id
+        if find "$prefix-$period.$id".* -type f -newer "$arc" \
+            -print0 2>/dev/null >"$tmp/found" && [ -s "$tmp/found" ]; then
+            arc=`xargs -0 ls -tr <"$tmp/found" | head -1`
+        else
+            break
+        fi
+    done
+    rm -f "$tmp/found"
+fi
+arc="$prefix-$period.$id.$suffix"
+# put it in the right place
+set_attr "$tmp/arc" "$tmp/inc" "$tmp/last"
 mkdir -p -m 755 "`dirname "$prefix"`"
 if $restart; then
-    rm -f "$prefix-$period-"*"$suffix"
+    rm -f "$prefix-$period".*.*
     mv -f "$tmp/last" "$prefix.last"
 fi
-backup="$prefix-$period-$id$suffix"
-mv -f "$tmp/tar" "$backup"
+mv -f "$tmp/arc" "$arc"
 mv -f "$tmp/inc" "$prefix.inc"
 
 
 # finish message
 echo -n "Backup completed:"
-$encrypt && echo -n " encrypted"
 $restart && echo -n " restarted" || echo -n " incremental"
+$encrypt && echo -n " encrypted"
 echo
-echo "$backup (`du -h "$backup" | cut -f1`) containing:"
+echo "$arc (`du -h "$arc" | cut -f1`) containing:"
 if $restart; then
     # show given arguments (instead of whole list)
     for i in "$@"; do echo "$i"; done
