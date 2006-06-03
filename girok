@@ -32,6 +32,7 @@ Period:
 Environment Variable:
   * BackupRoot for directory that will hold temporary files
   * GNUPGHOME or HOME for encryption
+  * GIROK_TAR for path to GNU tar
 EOF
     exit 2
 }
@@ -47,6 +48,8 @@ group="backup"
 encrypt=false
 encrypt_key=
 compress_type=gzip
+tar=${GIROK_TAR:-tar}
+tmproot=${BackupRoot:-.}
 
 # process options
 while getopts "hm:o:zjirp:e:" c; do
@@ -68,6 +71,7 @@ paths=("$@")
 
 # check environment
 err() { echo "girok: $@" >&2; exit 1; }
+#  GnuPG
 if $encrypt; then
     if ! [ -d "$HOME/.gnupg" -o -d "$GNUPGHOME" ]; then
         err "For encryption, HOME or at least GNUPGHOME must be set"
@@ -75,14 +79,25 @@ if $encrypt; then
     # TODO: existence of gpg key
 fi
 # TODO: existence of owner, group
+#  GNU tar
+case `uname` in
+    Linux) ;;
+    *BSD) tar=gtar ;;
+esac
+if ! { $tar --version | grep 'Free Software Foundation' } >/dev/null 2>&1; then
+    err "GNU tar unavailable, set GIROK_TAR to its path"
+fi
 
 
 # some useful pieces
+tmp=
 cleanup() {
     exitcode=$?
     trap "exit $exitcode" EXIT ERR HUP INT TERM
-    [ -f "$tmp/err" ] && cat "$tmp/err" >&2
-    rm -rf "$tmp"
+    if [ -d "$tmp" ]; then
+        [ -f "$tmp/err" ] && cat "$tmp/err" >&2
+        rm -rf "$tmp"
+    fi
 }
 is_root() { [ $EUID -eq 0 ]; }
 set_attr() {
@@ -114,7 +129,7 @@ fi
 
 
 # prepare a directory safe to play with
-tmp=`mktemp -d "${BackupRoot:-.}/girok.XXXXXX"`
+tmp=`mktemp -d "$tmproot/girok.XXXXXX"`
 trap cleanup EXIT ERR HUP INT TERM
 # determine current period
 periodfmt=${periodspec%/*}
@@ -137,7 +152,7 @@ chmod +w "$tmp/inc"
 
 # put everything into the archive
 justtar() {
-    tar -cvf - "${taropts[@]}" "${paths[@]}" 2>"$tmp/err"
+    $tar -cvf - "${taropts[@]}" "${paths[@]}" 2>"$tmp/err"
 }
 encrypttar() {
     justtar | \
