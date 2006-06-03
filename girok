@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # girok -- incremental backup script
-  Version=1.20060503
+  Version=1.20060603
 # Author: Jaeho Shin <netj@sparcs.org>
 # Refined: 2006-04-06
 # Created: 2003-10-29
@@ -30,7 +30,7 @@ Period:
   and "%m/6" means, restart every month and keep them for 5 months.
 
 Environment Variable:
-  * TMPDIR for directory that will hold temporary files
+  * BackupRoot for directory that will hold temporary files
   * GNUPGHOME or HOME for encryption
 EOF
     exit 2
@@ -114,7 +114,7 @@ fi
 
 
 # prepare a directory safe to play with
-tmp=`mktemp -d "${TMPDIR:-.}/girok.XXXXXX"`
+tmp=`mktemp -d "${BackupRoot:-.}/girok.XXXXXX"`
 trap cleanup EXIT ERR HUP INT TERM
 # determine current period
 periodfmt=${periodspec%/*}

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # girok -- backup manager
-  Version=1.20060503
+  Version=1.20060603
 # Author: Jaeho Shin <netj@sparcs.org>
 # Refined: 2006-04-06
 # Created: 2004-08-24
 
 set -e
 
-TMPDIR=${TMPDIR:-/backup}; export TMPDIR
-BackupRoot=${BackupRoot:-/backup/archive}
-BackupTab=${BackupTab:-/etc/backuptab}
+BackupRoot=${BackupRoot:-/backup}; export BackupRoot
+BackupArchive=${BackupArchive:-$BackupRoot/archive}
+BackupTable=${BackupTable:-$BackupRoot/backuptab}
 
 foreach_backup() {
     local line=0 rest= prefix= period= options= paths=
@@ -26,9 +26,9 @@ foreach_backup() {
         if [ -n "$prefix" -a -n "$periodspec" -a -n "$paths" ]; then
             "$@"
         else
-            echo "$BackupTab: line $line: syntax error" >&2
+            echo "$BackupTable: line $line: syntax error" >&2
         fi
-    done <"$BackupTab"
+    done <"$BackupTable"
 }
 
 Here=$PWD
@@ -37,7 +37,7 @@ Name=`basename "$0"`
 Args=("$@")
 error() { echo "$Name: $@" >&2; }
 
-cd "$BackupRoot"
+cd "$BackupArchive"
 case "$Name" in
     backup)
     usage() {
@@ -45,14 +45,14 @@ case "$Name" in
 girok $Version -- perform backup
 Usage: backup { <prefix> }
 
-Create backup archives for <prefix>es defined in $BackupTab.
-Each line in $BackupTab defines an archive series.  Each must have four
+Create backup archives for <prefix>es defined in $BackupTable.
+Each line in $BackupTable defines an archive series.  Each must have four
 fields separated by tab character: prefix, period, options, and paths.
 Lines that begin with a \# are ignored.  Each archive is created under
-$BackupRoot/ with the specified prefix, period, and options by girok(1).
+$BackupArchive/ with the specified prefix, period, and options by girok(1).
 
 For example, the following defines an archive series that will be stored as
-$BackupRoot/home/netj-*-*.tar.gpg.
+$BackupArchive/home/netj-*-*.tar.gpg.
 -->8--
 home/netj	%m/3	-e netj	/home/netj
 --8<--
@@ -103,7 +103,7 @@ EOF
     echo
 
     echo "= disk usages ="
-    df -h `find /backup/archive/ -type d` \
+    df -h `find "$BackupArchive" -type d` \
     | tail +2 | sort | uniq | sed -e 's/^/* /'
     echo
 
