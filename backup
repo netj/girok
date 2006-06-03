@@ -10,7 +10,7 @@ set -e
 BackupTmp=${BackupTmp:-$Base}; export BackupTmp
 BackupRoot=${BackupRoot:-$Base}
 BackupArchive=${BackupArchive:-$BackupRoot/archive}
-BackupTable=${BackupTable:-$BackupRoot/backuptab}
+BackupTable=${BackupTable:-$BackupRoot/table}
 
 foreach_backup() {
     local line=0 rest= prefix= period= options= paths=
