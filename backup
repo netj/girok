@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # girok -- backup manager
-  Version=1.20060603
 # Author: Jaeho Shin <netj@sparcs.org>
 # Refined: 2006-04-06
 # Created: 2004-08-24
 
 set -e
+. "`dirname "$0"`/.girok.sh"
 
-BackupRoot=${BackupRoot:-/backup}; export BackupRoot
+BackupTmp=${BackupTmp:-$Base}; export BackupTmp
+BackupRoot=${BackupRoot:-$Base}
 BackupArchive=${BackupArchive:-$BackupRoot/archive}
 BackupTable=${BackupTable:-$BackupRoot/backuptab}
 
@@ -31,13 +32,6 @@ foreach_backup() {
     done <"$BackupTable"
 }
 
-Here=$PWD
-Base=`cd "$(dirname "$0")" && pwd`
-Name=`basename "$0"`
-Args=("$@")
-error() { echo "$Name: $@" >&2; }
-
-cd "$BackupArchive"
 case "$Name" in
     backup)
     usage() {
@@ -58,7 +52,7 @@ home/netj	%m/3	-e netj	/home/netj
 --8<--
 See girok(1) for more information about periods and options.
 EOF
-        [ $# -gt 0 ] && error "$@"
+        [ $# -gt 0 ] && err "$@"
         exit 2
     }
     [ $# -eq 0 ] && usage
@@ -74,6 +68,7 @@ EOF
     tmp=`mktemp /tmp/backup.XXXXXX`
     trap finish EXIT ERR HUP INT TERM
 
+    cd "$BackupArchive"
     failure=0
     do_backup() {
         local a=
@@ -84,7 +79,7 @@ EOF
                     $prefix $periodspec $paths" >$tmp 2>&1; then
                 printf "%28s %5s" \
                     `grep 'containing:$' $tmp | sed -e 's/(\([^)]*\)).*/\1/'`
-                head -1 $tmp | sed -e 's/^.*://'
+                head -10 $tmp | grep completed: | sed -e 's/^.*://'
             else
                 echo FAILED
                 let ++failure
@@ -103,7 +98,7 @@ EOF
     echo
 
     echo "= disk usages ="
-    df -h `find "$BackupArchive" -type d` \
+    df -h `find "$BackupArchive/" -type d` \
     | tail +2 | sort | uniq | sed -e 's/^/* /'
     echo
 
@@ -121,7 +116,7 @@ Finds and extracts given paths from backup archives,
 from the most recent backup before the given time.
 Current date and time are used if not specified.
 EOF
-        [ $# -gt 0 ] && error "$@"
+        [ $# -gt 0 ] && err "$@"
         exit 2
     }
     # process options
@@ -132,6 +127,8 @@ EOF
     done
     shift $(($OPTIND - 1))
     [ $# -eq 0 ] && usage
+
+    cd "$BackupArchive"
     when=${when:-`date +%Y%m%d%H%M.%S`}
     # prepare timestamp
     timestamp=`mktemp /tmp/recover.XXXXXX`
@@ -139,22 +136,6 @@ EOF
     touch -m -t $when $timestamp 2>/dev/null ||
         usage "specify time in [[CC]YY]MMDDhhmm[.ss]"
 
-    timefmt="%Y-%m-%dT%H:%M:%S"
-    # GNU is default
-    mtime() { echo "`date -r $arc +$timefmt`"; }
-    chronological() { xargs -0r ls -tr; }
-    # detect other OSes
-    case `uname` in
-        *BSD)
-        mtime() { echo "`stat -f %Sm -t $timefmt $arc`"; }
-        chronological() {
-            local input=`cat` # XXX: must be very inefficient :(
-            if [ -n "$input" ]; then
-                echo "$input" | xargs -0 ls -tr
-            fi
-        }
-        ;;
-    esac
     extract_from() {
         local arc=$1
         case "$arc" in
@@ -163,7 +144,7 @@ EOF
             *.tar)     untar "$arc"                             ;;
             # TODO rememeber and reuse passphrase for key?
             *.tar.gpg) gpg --quiet --decrypt "$arc" | untar -   ;;
-            *) error "$arc: not supported"; return 0 ;;
+            *) err "$arc: not supported"; return 0 ;;
         esac
     }
     try_recovery() {
@@ -183,7 +164,7 @@ EOF
                     -print0 2>/dev/null | chronological | tail -1`
         local period=${arc%.0.*}
         if ! [ -f "$arc" ]; then
-            error "$prefix: none exists for $when"
+            err "$prefix: none exists for $when"
             return 0
         fi
         # TODO: check list of deleted files?

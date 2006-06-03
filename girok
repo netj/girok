@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # girok -- incremental backup script
-  Version=1.20060603
 # Author: Jaeho Shin <netj@sparcs.org>
 # Refined: 2006-04-06
 # Created: 2003-10-29
+
+set -e
+. "`dirname "$0"`/.girok.sh"
 
 usage() {
     cat <<EOF
@@ -37,19 +39,16 @@ EOF
     exit 2
 }
 
-set -e
-
 # default options
 umask 077
 ulimit -c 0
-mode="a=,ug=r"
-owner="backup"
-group="backup"
+mode=${BackupPerm:-a=,u=r}
+owner=${BackupOwner:-root}
+group=${BackupGroup:-}
 encrypt=false
 encrypt_key=
 compress_type=gzip
-tar=${GIROK_TAR:-tar}
-tmproot=${BackupRoot:-.}
+tmproot=${BackupTmp:-.}
 
 # process options
 while getopts "hm:o:zjirp:e:" c; do
@@ -70,7 +69,6 @@ paths=("$@")
 
 
 # check environment
-err() { echo "girok: $@" >&2; exit 1; }
 #  GnuPG
 if $encrypt; then
     if ! [ -d "$HOME/.gnupg" -o -d "$GNUPGHOME" ]; then
@@ -79,14 +77,6 @@ if $encrypt; then
     # TODO: existence of gpg key
 fi
 # TODO: existence of owner, group
-#  GNU tar
-case `uname` in
-    Linux) ;;
-    *BSD) tar=gtar ;;
-esac
-if ! { $tar --version | grep 'Free Software Foundation' } >/dev/null 2>&1; then
-    err "GNU tar unavailable, set GIROK_TAR to its path"
-fi
 
 
 # some useful pieces
@@ -105,7 +95,7 @@ set_attr() {
     for f in "$@"; do
         [ -e "$f" ] || continue
         is_root && chown -f $owner "$f"
-        chgrp -f $group "$f"
+        [ -z "$group" ] || chgrp -f $group "$f"
         chmod -f $mode "$f"
     done
 }
@@ -152,7 +142,7 @@ chmod +w "$tmp/inc"
 
 # put everything into the archive
 justtar() {
-    $tar -cvf - "${taropts[@]}" "${paths[@]}" 2>"$tmp/err"
+    tar -cvf - "${taropts[@]}" "${paths[@]}" 2>"$tmp/err"
 }
 encrypttar() {
     justtar | \
