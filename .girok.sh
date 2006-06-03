@@ -46,6 +46,6 @@ eval 'tar() { command '"'${tar//"'"/"'\\''"}'"' "$@"; }'
 
 
 # GNU tar is very essential!
-if ! { tar --version | grep 'Free Software Foundation'; } &>/dev/null; then
+if ! { tar --version | grep 'Free Software Foundation\|GNU'; } &>/dev/null; then
     err "GNU tar unavailable, set GIROK_TAR to its path"
 fi
