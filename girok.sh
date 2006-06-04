@@ -3,7 +3,7 @@
 # Author: Jaeho Shin <netj@sparcs.org>
 # Refined: 2006-04-06
 # Created: 2003-10-29
-Version=2.0.1
+Version=2.0.2
 
 set -e
 
@@ -12,7 +12,7 @@ Base=$(cd "`dirname "$0"`" && pwd)
 Here=$PWD
 Args=("$@")
 Name=`basename "$0"`
-err() { echo "$Name: $@" >&2; exit 1; }
+err() { echo "$Name: $@" >&2; false; }
 
 # detect OS and setup environment
 timefmt="%Y-%m-%dT%H:%M:%S"
@@ -49,23 +49,21 @@ fi
 # temporary directory & cleanup ###############################################
 tmp=
 need_tmpdir() {
-    [ -d "$tmp" ] || tmp=`mktemp -d "${TMPDIR:-${Root:-/tmp}}/girok.XXXXXX"`
+    [ -d "$tmp" ] || tmp=`mktemp -d \
+        "${1:-${TMPDIR:-${Root:-/tmp}}}/girok.XXXXXX"`
 }
 todos=()
 before_exit() { todos=("${todos[@]}" "$@"); }
 cleanup() {
     trap "exit $?" EXIT
     trap "" ERR HUP INT TERM
-    # cleanup tmp?
-    if [ -d "$tmp" ]; then
-        [ -f "$tmp/err" ] && cat "$tmp/err" >&2
-        rm -rf "$tmp"
-    fi
     # do scheduled jobs
     local cmd=
     for cmd in "${todos[@]}"; do
         eval "$cmd"
     done
+    # cleanup tmp?
+    ! [ -d "$tmp" ] || rm -rf "$tmp"
     # all done, let's get out
     exit
 }
@@ -113,8 +111,7 @@ foreach_backup() {
             fi
             ;;
             *=*) # value definition
-            local name=${REPLY%%=*}
-            eval "$REPLY"
+            eval "export $REPLY"
             ;;
         esac
     done <"$Config"
@@ -144,7 +141,7 @@ EOF
         [ $# -gt 0 ] && err "$@"
         exit 2
     }
-    [ $# -eq 0 ] && usage
+    [ $# -gt 0 ] || usage
 
     under_the_repository
     need_tmpdir
@@ -162,10 +159,11 @@ EOF
         for a in "${Args[@]}"; do
             [ `expr "$prefix" : "$a"` -eq ${#prefix} ] || continue
             printf "* %-16s" "$prefix:"
-            if eval "girok $options $prefix $periodspec $paths" &>"$tmp/o"; then
-                printf "%28s %5s" `grep 'containing:$' "$tmp/o" \
-                                 | sed -e 's/(\([^)]*\)).*/\1/'`
-                head -10 "$tmp/o" | grep 'girok finished:' | sed -e 's/^.*://'
+            if (eval "set -e; \
+                girok $options $prefix $periodspec $paths" &>"$tmp/o"); then
+                valueof() { grep "^ $1: " "$tmp/o" | sed -e "s/^ $1: //"; }
+                printf "%28s %5s" "`valueof archive`" `valueof size`
+                echo " `valueof options`"
             else
                 echo FAILED
                 let ++failure
@@ -177,8 +175,7 @@ EOF
     echo
 
     echo "= disk usages ="
-    df -h `find "$Archive/" -type d` \
-    | tail +2 | sort | uniq | sed -e 's/^/* /'
+    df -h `find . -type d` | tail +2 | sort | uniq | sed -e 's/^/* /'
     echo
 
     return $failure
@@ -199,7 +196,7 @@ EOF
         # TODO: show recoverable paths from Config
         # foreach_backup show_paths
         [ $# -gt 0 ] && err "$@"
-        exit 2
+        exit
     }
     # process options
     while getopts "t:" o; do
@@ -208,10 +205,10 @@ EOF
         esac
     done
     shift $(($OPTIND - 1))
-    [ $# -eq 0 ] && usage
+    [ $# -gt 0 ] || usage
 
     under_the_repository
-    need_tmpdir
+    need_tmpdir /tmp
 
     # prepare timestamp
     local when=${when:-`date +%Y%m%d%H%M.%S`}
@@ -227,12 +224,13 @@ EOF
             *.tar)     untar "$arc"                             ;;
             # TODO rememeber and reuse passphrase for key?
             *.tar.gpg) gpg --quiet --decrypt "$arc" | untar -   ;;
-            *) err "$arc: not supported"; return 0 ;;
+            *) err "$arc: not supported" || true ;;
         esac
     }
     try_recovery() {
         # find requested files which may be in this archive series
-        local p a qs; qs=()
+        local p a
+        declare -a qs=()
         for p in `eval "echo $paths"`; do
             for a in "${Args[@]}"; do
                 [ `expr "$a" : "$p"` -eq ${#p} ] ||
@@ -313,13 +311,13 @@ EOF
     local owner=${Owner:-root}
     local group=${Group:-}
     local encrypt=${Encrypt:-}
-    local compress_type=gzip
+    local compress=gzip
 
     # process options
     while getopts "hm:o:zjirp:e:" c; do
         case "$c" in
-            z) compress_type=gzip ;;
-            j) compress_type=bzip2 ;;
+            z) compress=gzip ;;
+            j) compress=bzip2 ;;
             e) encrypt=$OPTARG ;;
             o) owner=$OPTARG ;;
             g) group=$OPTARG ;;
@@ -328,9 +326,9 @@ EOF
         esac
     done
     shift $(($OPTIND - 1))
-    [ $# -lt 3 ] && usage
+    [ $# -ge 3 ] || usage
     local prefix=$1 periodspec=$2; shift 2
-    local paths=("$@")
+    declare -a paths=("$@")
 
 
     # check environment
@@ -346,17 +344,17 @@ EOF
 
     # setup option dependent values
     local suffix="tar"
-    local taropts=()
+    declare -a taropts=()
     addtaropt() { taropts=("${taropts[@]}" "$@"); }
     # process encrypt/compress option
     if [ -n "$encrypt" ]; then
         suffix="tar.gpg"
     else
-        case "$compress_type" in
+        case "$compress" in
             bzip2) addtaropt -j; suffix="tar.bz2" ;;
             gzip)  addtaropt -z; suffix="tar.gz" ;;
             "")    ;;
-            *)     echo unknown compress type: $compress_type >&2; exit 4 ;;
+            *)     err "$compress: unknown compression type" ;;
         esac
     fi
 
@@ -382,7 +380,7 @@ EOF
 
     # put everything into the archive
     justtar() {
-        tar -cvf - "${taropts[@]}" "${paths[@]}" 2>"$tmp/err"
+        tar -cf - "${taropts[@]}" "${paths[@]}"
     }
     encrypttar() {
         justtar | \
@@ -392,9 +390,10 @@ EOF
     local tarcmd=justtar
     [ -z "$encrypt" ] || tarcmd=encrypttar
     if ! $tarcmd >"$tmp/arc"; then
-        # TODO: handle more error conditions
-        [ -s "$tmp/arc" ] || exit 4
+        # TODO: handle error codes
+        true
     fi
+    [ -s "$tmp/arc" ] || err "failed creating archive"
     # TODO: maintain a file list, or list of deleted files
 
 
@@ -421,9 +420,9 @@ EOF
         local f=
         for f in "$@"; do
             [ -e "$f" ] || continue
-            [ $EUID -ne 0 ] || chown -f $owner "$f"
-            [ -z "$group" ] || chgrp -f $group "$f"
-            chmod -f $mode "$f"
+            [ $EUID -ne 0 ] || chown $owner "$f"
+            [ -z "$group" ] || chgrp $group "$f"
+            chmod $mode "$f"
         done
     }
     set_attr "$tmp/arc" "$tmp/inc" "$tmp/last"
@@ -437,19 +436,13 @@ EOF
 
 
     # finish message
-    echo -n "girok finished:"
+    echo "girok done:"
+    echo " archive: $arc"
+    echo " size: `du -h "$arc" | cut -f1`"
+    echo -n " options:"
     $restart && echo -n " restarted" || echo -n " incremental"
     [ -z "$encrypt" ] || echo -n " encrypted"
     echo
-    echo "$arc (`du -h "$arc" | cut -f1`) containing:"
-    if $restart; then
-        # show given arguments (instead of whole list)
-        for i in "$@"; do echo "$i"; done
-    else
-        # show changed(stderr output of tar), so backup'ed files but no directories
-        grep -v /$ "$tmp/err"
-    fi
-    rm -f "$tmp/err"
 
 
     true
@@ -470,6 +463,7 @@ EOF
     for r in "$@"; do
         mkdir -pv "$r/archive"
         cp -fv "$0" "$r/girok"
+        chmod -v +x "$r/girok"
         ln -sfv girok "$r/backup"
         ln -sfv girok "$r/recover"
         if ! [ -f "$r/config" ]; then
@@ -480,7 +474,7 @@ EOF
 
 ## Parameters
 Owner=root
-Group=backup
+Group=
 Mode=a=,u=r
 
 ## Archive series
