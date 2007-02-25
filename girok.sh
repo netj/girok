@@ -175,7 +175,7 @@ EOF
     echo
 
     echo "= disk usages ="
-    df -h `find . -type d` | tail +2 | sort | uniq | sed -e 's/^/* /'
+    df -h `find . -type d` | tail -n +2 | sort | uniq | sed -e 's/^/* /'
     echo
 
     return $failure
