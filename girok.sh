@@ -3,14 +3,13 @@
 # Author: Jaeho Shin <netj@sparcs.org>
 # Refined: 2006-04-06
 # Created: 2003-10-29
-Version=2.0.2
+Version=2.0.3
 
 set -e
 
 # useful vocabularies
 Base=$(cd "`dirname "$0"`" && pwd)
 Here=$PWD
-Args=("$@")
 Name=`basename "$0"`
 err() { echo "$Name: $@" >&2; false; }
 
@@ -147,7 +146,7 @@ EOF
     need_tmpdir
 
     echo "girok $Version"
-    echo "$Name ${Args[@]}"
+    echo "$Name $@"
     echo "begins at `date +'%F %T %z'`"
     echo
     before_exit 'echo "ends   at `date +"%F %T %z"`"'
@@ -156,8 +155,8 @@ EOF
     local failure=0
     run_girok() {
         local a=
-        for a in "${Args[@]}"; do
-            [ `expr "$prefix" : "$a"` -eq ${#prefix} ] || continue
+        for a in "$@"; do
+            [ `expr -- "$prefix" : "$a"` -eq ${#prefix} ] || continue
             printf "* %-16s" "$prefix:"
             if (eval "set -e; \
                 girok $options $prefix $periodspec $paths" &>"$tmp/o"); then
@@ -171,7 +170,7 @@ EOF
             fi
         done
     }
-    foreach_backup run_girok
+    foreach_backup run_girok "$@"
     echo
 
     echo "= disk usages ="
@@ -229,12 +228,12 @@ EOF
     }
     try_recovery() {
         # find requested files which may be in this archive series
-        local p a
+        local p= a=
         declare -a qs=()
         for p in `eval "echo $paths"`; do
-            for a in "${Args[@]}"; do
-                [ `expr "$a" : "$p"` -eq ${#p} ] ||
-                [ `expr "$p" : "$a"` -eq ${#a} ] || continue
+            for a in "$@"; do
+                [ `expr -- "$a" : "$p"` -eq ${#p} ] ||
+                [ `expr -- "$p" : "$a"` -eq ${#a} ] || continue
                 qs=("${qs[@]}" "${a#/}")
             done
         done
@@ -264,7 +263,7 @@ EOF
         done
     }
 
-    foreach_backup try_recovery
+    foreach_backup try_recovery "$@"
 
     true
 }
@@ -343,7 +342,7 @@ EOF
 
 
     # setup option dependent values
-    local suffix="tar"
+    local suffix=tar
     declare -a taropts=()
     addtaropt() { taropts=("${taropts[@]}" "$@"); }
     # process encrypt/compress option
