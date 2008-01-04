@@ -3,7 +3,7 @@
 # Author: Jaeho Shin <netj@sparcs.org>
 # Refined: 2006-04-06
 # Created: 2003-10-29
-Version=2.0.3
+Version=2.0.4
 
 set -e
 
@@ -363,8 +363,8 @@ EOF
     local periodfmt=${periodspec%/*}
     local periodcnt=${periodspec#*/}
     local period=`date +"$periodfmt" | sed -e 's/^0*//g'`
-    period=`printf "%0${#periodcnt}d" $(($period % $periodcnt))`
     period=${period:-0}
+    period=`printf "%0${#periodcnt}d" $(($period % $periodcnt))`
     # determine whether to restart or not
     local restart=false
     if [ "$period@$periodspec" != "`cat "$prefix.last" 2>/dev/null`" ]; then
